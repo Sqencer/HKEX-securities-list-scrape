@@ -144,6 +144,7 @@ def run(workers: int = 5):
     max_pass = 3
     while pending and max_pass>0:
         error = []
+        print(f"Running remaining: {max_pass} | Error: {len(error)}")
         max_pass -= 1
 
         with ThreadPoolExecutor(max_workers=workers) as executor:
@@ -169,9 +170,9 @@ def run(workers: int = 5):
                     
         pending = error
     
-    final_errors = [c for c, r in results.items() if r.get('error')]
-    if final_errors:
-        print(f"\n{len(final_errors)} permanently failed after {max_pass} passes.")
+
+    if error:
+        print(f"\n{len(error)} permanently failed after {max_pass} passes.")
 
 
 
