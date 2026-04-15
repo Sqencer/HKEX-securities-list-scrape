@@ -2,38 +2,59 @@
 #Runs for at least 30min
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import requests, re, json, time, threading
+import requests, re, json, time, threading, zhconv
 import pandas as pd
 
 
 class EXCELHANDLER:
     def __init__(self):
-        self.url = 'https://www.hkex.com.hk/eng/services/trading/securities/securitieslists/ListOfSecurities.xlsx'
+        self.url_en = 'https://www.hkex.com.hk/eng/services/trading/securities/securitieslists/ListOfSecurities.xlsx'
+        self.url_tc = 'https://www.hkex.com.hk/chi/services/trading/securities/securitieslists/ListOfSecurities_c.xlsx'
+
         self.headers = {
             'User-Agent': 'Mozilla/5.0 Chrome/124.0.0.0 Safari/537.36',
             'Referer': 'https://www.hkex.com.hk/',
         }       
 
-    def download(self):
-        response = requests.get(self.url, headers= self.headers, timeout = 30)
+    def downloaden(self):
+        response = requests.get(self.url_en, headers= self.headers, timeout = 30)
         response.raise_for_status()
-        with open('ListOfSecurities.xlsx', 'wb') as f:
+        with open('ListOfSecurities_en.xlsx', 'wb') as f:
           f.write(response.content)
 
+
+    def downloadtc_read(self):
+        response = requests.get(self.url_tc, headers= self.headers, timeout = 30)
+        response.raise_for_status()
+        with open('ListOfSecurities_tc.xlsx', 'wb') as f:
+          f.write(response.content)
+
+        df = pd.read_excel("ListOfSecurities_tc.xlsx", skiprows=2, engine="openpyxl")
+        first_two_col = df.iloc[:, 0:2]
+        first_two_col['股份名称'] = first_two_col['股份名稱'].apply(self.convert_tcsc)
+        first_two_col['股份代號'] = first_two_col['股份代號'].astype(str).str.zfill(5)
+        return first_two_col
+
     def read_dataframe(self):
-        df = pd.read_excel("ListOfSecurities.xlsx", skiprows=2, engine="openpyxl")
+        df = pd.read_excel("ListOfSecurities_en.xlsx", skiprows=2, engine="openpyxl")
         return df
     
     def save_excel(self, df: pd.DataFrame, filename: str = 'output.xlsx'):
-        # NEW: was missing entirely from your class, run() called it and would crash
         df.to_excel(filename, index=False, engine='openpyxl')
         print(f"Saved '{filename}'")
+
+    def convert_tcsc(self, text):
+        if isinstance(text, str):
+            return zhconv.convert(text, "zh-hans")
+        return text
+
     
 
 
 class HKEXScraper:
     KEYS = {
-        "Sec_name_en" : "issuer_name",
+        "Sec_name_en" : "nm",
+        "Issuere_name": "issuer_name",
         "Industry_1" : "hsic_ind_classification",
         "Industry_2" : "hsic_sub_sector_classification",
         "List_date" : "listing_date",
@@ -47,7 +68,7 @@ class HKEXScraper:
         "Registrar" : "registrar",
         "EPS" : "eps",
         "P/E" : "pe",
-        "Mkt_Cap" : "mkt_cap"
+        "Mkt_Cap(B)" : "mkt_cap"
     }
     def __init__(self):
         self.token = None
@@ -129,8 +150,9 @@ def scrape_single(scraper: HKEXScraper, code: str) -> dict:
         for col_name in HKEXScraper.KEYS:
             result[col_name] = ''
         result['error'] = str(e)
-        print(e)
         return result
+
+
 
 
 def run(workers: int = 3):
@@ -139,11 +161,13 @@ def run(workers: int = 3):
     shared_scraper = HKEXScraper()
 
 
-    #handler.download()
+    handler.downloaden()
+    chi_col = handler.downloadtc_read()
     original_df = handler.read_dataframe()
     first_col = original_df.columns[0]
     original_df[first_col] = original_df[first_col].astype(str).str.zfill(5)
     stock_codes = original_df.iloc[:,0].tolist()
+    original_df = pd.concat([chi_col, original_df], axis=1)
     print("Data read")
 
 
@@ -151,6 +175,7 @@ def run(workers: int = 3):
     pending = stock_codes
     max_pass = 3
     while pending and max_pass>0:
+        round_time = time.perf_counter()
         completed = 0
         error = []
         print(f"Running Remaining:{max_pass} | Pending: {len(pending)}")
@@ -162,7 +187,14 @@ def run(workers: int = 3):
                 try:
                     single_result = future.result()
                     if single_result.get("error") and max_pass != 0:
-                        error.append(code)
+                        failcode = futures[future]
+                        error.append(failcode)
+                        print(f"{failcode} got an error")
+                    elif single_result.get("error") and max_pass == 0:
+                        results.append(single_result)
+                        failcode = futures[future]
+                        error.append(failcode)
+                        print(f"{failcode} got an error")
                     else:
                         results.append(single_result)
                 except Exception as e:
@@ -173,7 +205,7 @@ def run(workers: int = 3):
                 if completed % 100 == 0 or completed == len(pending):
                     print(f"Round: {3-max_pass} | Progress: {completed}/{len(pending)} | "
                         f"Error: {len(error)}")
-                    elapsed = time.perf_counter() - start
+                    elapsed = time.perf_counter() - round_time
                     print(f"Time: {elapsed:.2f}s | "
                         f"Rate: {completed/elapsed:.1f} stocks/sec")
                     
@@ -191,6 +223,7 @@ def run(workers: int = 3):
     print(f"Scraped DataFrame: {scraped_df.shape}")
 
 
+
     joined_df = original_df.merge(
         scraped_df,
         left_on=first_col,
@@ -198,9 +231,13 @@ def run(workers: int = 3):
         how='left'
     )
     print(f"Joined DataFrame: {joined_df.shape}")
+    # mask = joined_df["Name of Securities"].str.contains("REIT", na=False)
+    # joined_df.loc[mask, "Industry_1"] = joined_df.loc[mask, "Sec_name_en"]
+    # joined_df.loc[mask, "Sec_name_en"] = ''
 
-
-    handler.save_excel(joined_df, 'output.xlsx')
+    joined_df.drop(columns=[first_col], inplace=True, errors='ignore')
+    run_label = time.strftime('%Y%m%d_%H%M')
+    handler.save_excel(joined_df, f'output_{run_label}.xlsx')
     elapsed = time.perf_counter() - start
     print(f"Total Time: {elapsed:.2f}s | "
         f"Rate: {len(stock_codes)/elapsed:.1f} stocks/sec")
@@ -208,5 +245,5 @@ def run(workers: int = 3):
 
 
 if __name__ == '__main__':
-    run(5)
+    run()
 
