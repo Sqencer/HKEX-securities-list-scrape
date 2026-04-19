@@ -166,8 +166,9 @@ def run(workers: int = 3):
     original_df = handler.read_dataframe()
     first_col = original_df.columns[0]
     original_df[first_col] = original_df[first_col].astype(str).str.zfill(5)
-    stock_codes = original_df.iloc[:,0].tolist()
     original_df = pd.concat([chi_col, original_df], axis=1)
+    filtered_df = original_df[original_df["Category"].isin(["Equity", "Real Estate Investment Trusts"])]
+    stock_codes = filtered_df.iloc[:,0].tolist()
     print("Data read")
 
 
@@ -224,7 +225,7 @@ def run(workers: int = 3):
 
 
 
-    joined_df = original_df.merge(
+    joined_df = filtered_df.merge(
         scraped_df,
         left_on=first_col,
         right_on='stock_code',
