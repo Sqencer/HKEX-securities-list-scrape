@@ -67,8 +67,11 @@ class HKEXScraper:
         "List_Cat" : "listing_category",
         "Registrar" : "registrar",
         "EPS" : "eps",
+        "EPS_ccy" : "eps_ccy",
         "P/E" : "pe",
-        "Mkt_Cap(B)" : "mkt_cap"
+        "CCY" : "ccy",
+        "Mkt_Cap" : "mkt_cap",
+        "Mkt_Unit" : "mkt_cap_u"
     }
     def __init__(self):
         self.token = None
